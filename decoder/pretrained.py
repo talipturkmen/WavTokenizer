@@ -282,4 +282,6 @@ class WavTokenizer(nn.Module):
             Tensor: The output tensor representing the reconstructed audio waveform of shape (B, T).
         """
         features = self.codes_to_features(codes)
-        return self.decode(features, bandwidth_id=torch.tensor([0], device=features.device), **kwargs)
+        audio =  self.decode(features, bandwidth_id=torch.tensor([0], device=features.device), **kwargs)
+        audio = audio.unsqueeze(1) # add channel dim
+        return audio
