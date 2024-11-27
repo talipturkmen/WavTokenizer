@@ -5,9 +5,12 @@ import torch
 import yaml
 from huggingface_hub import hf_hub_download
 from torch import nn
-from decoder.feature_extractors import FeatureExtractor, EncodecFeatures
-from decoder.heads import FourierHead
-from decoder.models import Backbone
+import importlib
+
+from ..encoder.utils import convert_audio
+from .feature_extractors import FeatureExtractor, EncodecFeatures
+from .heads import FourierHead
+from .models import Backbone
 
 
 def instantiate_class(args: Union[Any, Tuple[Any, ...]], init: Dict[str, Any]) -> Any:
@@ -23,10 +26,30 @@ def instantiate_class(args: Union[Any, Tuple[Any, ...]], init: Dict[str, Any]) -
     kwargs = init.get("init_args", {})
     if not isinstance(args, tuple):
         args = (args,)
-    class_module, class_name = init["class_path"].rsplit(".", 1)
-    module = __import__(class_module, fromlist=[class_name])
+    
+    class_path = init["class_path"]
+    class_module, class_name = class_path.rsplit(".", 1)
+    _, class_module = class_module.rsplit(".", 1)
+    # Get the current package context dynamically
+    package = __package__
+    # Dynamically prepend the package to the module path
+    if not class_module.startswith(package):
+        class_module = f"{package}.{class_module}"
+
+    # Use importlib to import the module dynamically
+    module = importlib.import_module(class_module)
+
+    # Get the class from the module
     args_class = getattr(module, class_name)
     return args_class(*args, **kwargs)
+
+    # kwargs = init.get("init_args", {})
+    # if not isinstance(args, tuple):
+    #     args = (args,)
+    # class_module, class_name = init["class_path"].rsplit(".", 1)
+    # module = __import__(class_module, fromlist=[class_name])
+    # args_class = getattr(module, class_name)
+    # return args_class(*args, **kwargs)
 
 
 class WavTokenizer(nn.Module):
@@ -38,12 +61,13 @@ class WavTokenizer(nn.Module):
     """
 
     def __init__(
-        self, feature_extractor: FeatureExtractor, backbone: Backbone, head: FourierHead,
+        self, feature_extractor: FeatureExtractor, backbone: Backbone, head: FourierHead, sr:int=24000
     ):
         super().__init__()
         self.feature_extractor = feature_extractor
         self.backbone = backbone
         self.head = head
+        self.sr = sr
 
     @classmethod
     def from_hparams(cls, config_path: str) -> "Vocos":
@@ -73,7 +97,8 @@ class WavTokenizer(nn.Module):
                 for key, value in model.feature_extractor.encodec.state_dict().items()
             }
             state_dict.update(encodec_parameters)
-        model.load_state_dict(state_dict)
+        result = model.load_state_dict(state_dict)
+        print('CHECKPOINT LOADED result', result)
         model.eval()
         return model
 
@@ -109,7 +134,8 @@ class WavTokenizer(nn.Module):
         #         for key, value in model.feature_extractor.encodec.state_dict().items()
         #     }
         #     state_dict.update(encodec_parameters)
-        model.load_state_dict(state_dict)
+        result = model.load_state_dict(state_dict)
+        print('CHECKPOINT LOADED RESULT:', result)
         model.eval()
         return model
 
@@ -187,6 +213,11 @@ class WavTokenizer(nn.Module):
     def encode_infer(self, audio_input: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         features, discrete_codes, _ = self.feature_extractor.infer(audio_input, **kwargs)
         return features,discrete_codes
+    
+    def encode_audio(self, audio_input: torch.Tensor, sr:int, **kwargs: Any) -> torch.Tensor:
+        audio_input = convert_audio(audio_input, sr, self.sr, 1) 
+        return self.encode_infer(audio_input, bandwidth_id=torch.tensor([0]), **kwargs)
+    
 
 
     @torch.inference_mode()
@@ -228,12 +259,27 @@ class WavTokenizer(nn.Module):
             codes = codes.unsqueeze(1)
 
         n_bins = self.feature_extractor.encodec.quantizer.bins
-        offsets = torch.arange(0, n_bins * len(codes), n_bins, device=codes.device)
-        embeddings_idxs = codes + offsets.view(-1, 1, 1)
-
+        offsets = torch.arange(0, n_bins * codes.size(1), n_bins, device=codes.device)
+        embeddings_idxs = codes + offsets.view(1, -1, 1)
         tmp=torch.cat([vq.codebook for vq in self.feature_extractor.encodec.quantizer.vq.layers],dim=0)
         # features = torch.nn.functional.embedding(embeddings_idxs, self.feature_extractor.codebook_weights).sum(dim=0)
-        features = torch.nn.functional.embedding(embeddings_idxs, tmp).sum(dim=0)
+        features = torch.nn.functional.embedding(embeddings_idxs, tmp).sum(dim=1)
         features = features.transpose(1, 2)
 
         return features
+
+    @torch.inference_mode()
+    def decode_codes(self, codes: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        """
+        Method to decode audio waveform from codes. The features input is passed through
+        the backbone and the head to reconstruct the audio output.
+
+        Args:
+            features_input (Tensor): The input tensor of features of shape (B, C, L), where B is the batch size,
+                                     C denotes the feature dimension, and L is the sequence length.
+
+        Returns:
+            Tensor: The output tensor representing the reconstructed audio waveform of shape (B, T).
+        """
+        features = self.codes_to_features(codes)
+        return self.decode(features, bandwidth_id=torch.tensor([0]), **kwargs)

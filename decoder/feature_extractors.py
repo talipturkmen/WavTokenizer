@@ -4,10 +4,10 @@ import torch
 import torchaudio
 from torch import nn
 import math
-from decoder.modules import safe_log
-from encoder.modules import SEANetEncoder, SEANetDecoder
-from encoder import EncodecModel
-from encoder.quantization import ResidualVectorQuantizer
+from .modules import safe_log
+from ..encoder.modules import SEANetEncoder, SEANetDecoder
+from ..encoder import EncodecModel
+from ..encoder.quantization import ResidualVectorQuantizer
 
 
 class FeatureExtractor(nn.Module):
@@ -105,7 +105,8 @@ class EncodecFeatures(FeatureExtractor):
         if self.training:
             self.encodec.train()
 
-        audio = audio.unsqueeze(1)                  # audio(16,24000)
+        if audio.ndim == 2: # assume you have always batch dim
+            audio = audio.unsqueeze(1)                  # audio(16,24000)
 
         # breakpoint()
 
@@ -131,7 +132,8 @@ class EncodecFeatures(FeatureExtractor):
         if self.training:
             self.encodec.train()
 
-        audio = audio.unsqueeze(1)                  # audio(16,24000)
+        if audio.ndim == 2:
+            audio = audio.unsqueeze(1)                  # audio(16,24000)
         emb = self.encodec.encoder(audio)
         q_res = self.encodec.quantizer.infer(emb, self.frame_rate, bandwidth=self.bandwidths[bandwidth_id])
         quantized = q_res.quantized
