@@ -135,7 +135,7 @@ class WavTokenizer(nn.Module):
         #     }
         #     state_dict.update(encodec_parameters)
         result = model.load_state_dict(state_dict)
-        print('CHECKPOINT LOADED RESULT:', result)
+        print('Wavtokenizer CHECKPOINT LOADED RESULT:', result)
         model.eval()
         return model
 
@@ -205,7 +205,7 @@ class WavTokenizer(nn.Module):
     @torch.inference_mode()
     def encode(self, audio_input: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         features, discrete_codes, _ = self.feature_extractor(audio_input, **kwargs)
-        return features,discrete_codes
+        return features, discrete_codes
 
 
     # 0818
